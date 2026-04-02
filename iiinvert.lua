@@ -1,0 +1,490 @@
+-- iiinvert
+-- 4 Track Live Trig Sequencer
+
+--             GRID
+--  ----------------------------
+-- |                            |
+-- |        track 1-4           |
+-- |                            |
+-- |----------------------------|
+-- |              |store invert |
+-- |  probability |recall stop/go/reset playhead/randomize |
+-- |              |  length     |
+--  ----------------------------
+
+--the diagram above shows the main interface. there are 3 button combos to know
+--hold row + randomize does just that row
+--hold row + reset clears that row (otherwise resets to step 1 immediately)(handy for syncing with other musicians)
+--hold row + invert enters note selection screen (bottom left is 0, each row an octave)
+
+--the variables below set script behavior
+--setTempo(i) and setVel(i) can be used to change tempo or velocity during playback. i is bpm/velocity
+
+notes = {46,42,39,36} --set initial track notes
+vel = 100 -- set average velocity
+velVary = 50 --set variation in velocity
+ch = 1 --set output channel
+tempo = 135 --bpm
+div = 4 --subdivide tempo e.g. 4 is 16th notes
+visuals = true --turn on/off visualizations (grid zero only)
+running = true --begin with playhead active
+noteOffs = true --send note off before starting next step and when pausing
+
+-------------------------------
+
+tempo = 60/(tempo*div) --bpm to time
+velMax = math.max(0, math.min(127, (vel + (velVary/2)))) --find max velocity
+velMin = math.max(0, math.min(127, (vel - (velVary/2)))) --find min velocity
+
+--create and set initial probability
+prob = {
+  key = {},
+  odds = {},
+}
+for i=1,4 do
+  prob.key[i] = 8
+  prob.odds[i] = 100
+end
+
+
+invert = {0,0,0,0} --track inversion status
+held = {false,false,false,false,true} --key held per row ([5] indicates none held)
+noteSet = {false,false,false,false,false} --this one more sensibly has [5] indicate that we're not in the note selection screen
+displayScale = {5,1,4,1,4,4,1,4,1,4,1,4}
+currentNotes = {}
+blinkSet = {false,false,false,false}
+
+--create and populate track sequences
+seq = {
+  pos = 0,
+  length = 16,
+  one = {}, two = {}, thr = {}, fou = {},
+}
+for i=1, 16 do
+  seq.one[i] = 0
+  seq.two[i] = 0
+  seq.thr[i] = 0
+  seq.fou[i] = 0
+end
+
+for j=1,127 do
+  currentNotes[j] = false
+end
+
+--create 4 pattern save slots
+function createpatterns()
+  patterns = {}
+  for i=1, 4 do
+    table.insert(patterns,
+      {id = i,
+        stored = 0,
+        active = 0,
+        length = 16,
+        one = {}, two = {}, thr = {}, fou = {},
+        })
+    for j=1, 16 do
+      patterns[i].one[j] = 0
+      patterns[i].two[j] = 0
+      patterns[i].thr[j] = 0
+      patterns[i].fou[j] = 0
+    end
+  end
+end
+
+function storepattern(i)
+  patterns[i].stored = 1
+  patterns[i].length = seq.length
+  for j=1,16 do
+    patterns[i].one[j] = seq.one[j]
+    patterns[i].two[j] = seq.two[j]
+    patterns[i].thr[j] = seq.thr[j]
+    patterns[i].fou[j] = seq.fou[j]
+  end
+end
+
+function recallpattern(i)
+  for j=1, 4 do
+    patterns[j].active = 0
+  end
+  patterns[i].active = 1
+  for j=1,16 do
+    seq.one[j] = patterns[i].one[j]
+    seq.two[j] = patterns[i].two[j]
+    seq.thr[j] = patterns[i].thr[j]
+    seq.fou[j] = patterns[i].fou[j]
+  end
+end
+
+--move through sequence steps
+function step()
+
+    if running then
+
+      if noteOffs == true then --optionally turn notes off before doing next step
+        for i=1,4 do
+          midi_note_off(notes[i],0,ch)
+        end
+
+        for j=1,127 do
+          if currentNotes[j] == true then
+            midi_note_off(j-1,0,ch)
+            currentNotes[j] = false
+          end
+        end
+      end
+
+      seq.pos = seq.pos + 1 --advance sequencer
+      if seq.pos > seq.length then
+        seq.pos = 1
+      end
+
+      if (seq.one[seq.pos] - invert[1]) ~= 0 then --an inverted 0 will be -1, and noninverted 1 will be 1
+        if math.random(100) <= prob.odds[1] then --roll dice for probability
+            midi_note_on(notes[1], math.random(velMin,velMax), ch) --send midi note
+            blinkSet[1] = true
+            currentNotes[notes[1]+1] = true
+        end
+      end
+      if (seq.two[seq.pos] - invert[2]) ~= 0 then
+        if math.random(100) <= prob.odds[2] then
+            midi_note_on(notes[2], math.random(velMin,velMax), ch)
+            blinkSet[2] = true
+            currentNotes[notes[2]+1] = true
+        end
+      end
+      if (seq.thr[seq.pos] - invert[3]) ~= 0 then
+        if math.random(100) <= prob.odds[3] then
+            midi_note_on(notes[3], math.random(velMin,velMax), ch)
+            blinkSet[3] = true
+            currentNotes[notes[3]+1] = true
+        end
+      end
+      if (seq.fou[seq.pos] - invert[4]) ~= 0 then
+        if math.random(100) <= prob.odds[4] then
+            midi_note_on(notes[4], math.random(velMin,velMax), ch)
+            blinkSet[4] = true
+            currentNotes[notes[4]+1] = true
+        end
+      end
+
+    redraw()
+
+  end
+end
+
+--grid presses
+function event_grid(x,y,z)
+  if z == 1 and noteSet[5] == false then --button on
+    if y == 1 then
+      seq.one[x] = seq.one[x] == 0 and 1 or 0 --flips state for reasons i don't understand
+    end
+    if y == 2 then
+      seq.two[x] = seq.two[x] == 0 and 1 or 0
+    end
+    if y == 3 then
+      seq.thr[x] = seq.thr[x] == 0 and 1 or 0
+    end
+    if y == 4 then
+      seq.fou[x] = seq.fou[x] == 0 and 1 or 0
+    end
+
+    if y <= 4 then--mark row(s) as held and 'none held' as false
+      held[y] = true
+      held[5] = false
+    end
+
+    if y >= 5 and x <= 8 then --set probability
+      prob.key[y-4] = x
+      prob.odds[y-4] = math.floor(((x-1) * (100/7))+0.5)
+    end
+
+    if x > 8 and y == 7 then  --set number of steps in sequence
+      seq.length = x-8
+    elseif x > 8 and y == 8 then
+      seq.length = x
+    end
+
+    if y == 5 and x > 8 and x <= 12 then
+      storepattern(x-8)
+    end
+
+    if y == 6 and x > 8 and x <= 12 then
+      recallpattern(x-8)
+    end
+
+    if y == 6 and x == 13 then
+      m:stop()
+      running = false
+      for j=1,127 do
+        if currentNotes[j] == true then
+          midi_note_off(j-1,0,ch)
+          currentNotes[j] = false
+        end
+      end
+
+    end
+    if y == 6 and x == 14 then
+      m:start()
+      running = true
+    end
+
+    --reset playhead. or if row held then clear that row
+    if y == 6 and x == 15 then
+      if held[5] == true then --reset playhead
+        seq.pos = 1
+        m:stop()
+        m:start()
+      end
+      if held[1] == true then --clear that row
+        for i=1, 16 do
+          seq.one[i] = 0
+        end
+      end
+      if held[2] == true then
+        for i=1, 16 do
+          seq.two[i] = 0
+        end
+      end
+      if held[3] == true then
+        for i=1, 16 do
+          seq.thr[i] = 0
+        end
+      end
+      if held[4] == true then
+        for i=1, 16 do
+          seq.fou[i] = 0
+        end
+      end
+
+    end
+
+    --randomize, hold row to randomize just that row
+    if y == 6 and x == 16 then
+      for i=1, 16 do
+        if held[1] == true then --randomize just that row
+          seq.one[i] = (math.random(2) - 1)
+        end
+        if held[2] == true then
+          seq.two[i] = (math.random(2) - 1)
+        end
+        if held[3] == true then
+          seq.thr[i] = (math.random(2) - 1)
+        end
+        if held[4] == true then
+          seq.fou[i] = (math.random(2) - 1)
+        end
+        if held[5] == true then --randomize all
+          seq.one[i] = (math.random(2) - 1)
+          seq.two[i] = (math.random(2) - 1)
+          seq.thr[i] = (math.random(2) - 1)
+          seq.fou[i] = (math.random(2) - 1)
+        end
+      end
+    end
+
+    if y == 5 and x >= 13 then --invert row or go to set note
+      if held[5] == true then
+        invert[x-12] = invert[x-12] == 0 and 1 or 0
+      elseif held[5] == false then
+        noteDraw()
+        noteSet[x-12] = true
+        noteSet[5] = true
+      end
+    end
+
+  elseif z == 0 then --when row released stop marking it as held
+    if y <= 4 then
+      held[y] = false
+      if held[1] == false and held[2] == false and held[3] == false and held[4] == false then
+        held[5] = true --check in case one row released when another still held
+      end
+    end
+
+  elseif z == 1 and noteSet[5] == true then
+    for n=1,4 do
+      if noteSet[n] == true then
+        notes[n] = keyToNote(x,y)
+      end
+    end
+    for m=1,5 do
+      noteSet[m] = false
+    end
+  end
+  redraw()
+end
+
+function redraw() --grid lighting
+  grid_led_all(0)
+  if noteSet[5] == false then
+    for i=1, seq.length do --will = 1(normal) or -1(invert) if step is on
+      if (seq.one[i] - invert[1]) ~= 0 then
+        grid_led(i, 1, 10)
+      end
+      if (seq.two[i] - invert[2]) ~= 0 then
+        grid_led(i, 2, 10)
+      end
+      if (seq.thr[i] - invert[3]) ~= 0 then
+        grid_led(i, 3, 10)
+      end
+      if (seq.fou[i] - invert[4]) ~= 0 then
+        grid_led(i, 4, 10)
+      end
+    end
+
+    for j=1,4 do --playhead
+      grid_led(seq.pos, j, 5, true)
+    end
+
+    --call visuals
+    if (seq.one[seq.pos] - invert[1]) ~= 0 then
+      blink(1)
+    end
+    if (seq.two[seq.pos] - invert[2]) ~= 0 then
+      blink(2)
+    end
+    if (seq.thr[seq.pos] - invert[3]) ~= 0 then
+      blink(3)
+    end
+    if (seq.fou[seq.pos] - invert[4]) ~= 0 then
+      blink(4)
+    end
+
+    --probabilities
+    for j=1, 8 do
+      for k=5, 8 do
+        grid_led(j,k,j)
+      end
+    end
+    for k=1,4 do
+      grid_led(prob.key[k], (k+4), 13)
+    end
+
+    --length
+    for j=9, 16 do
+      for k=7, 8 do
+        grid_led(j,k,2)
+      end
+    end
+    if seq.length <= 8 then
+      grid_led((seq.length+8), 7, 13)
+    elseif seq.length > 8 then
+      grid_led(seq.length, 8, 13)
+    end
+
+    --patterns stored and selected
+    for k=9, 12 do
+      grid_led(k,5, (patterns[k-8].stored * 5))
+    end
+    for k=9, 12 do
+      grid_led(k,6, (patterns[k-8].active * 15))
+    end
+
+    if running == true then
+      grid_led(13,6,9) --stop button
+    else
+      grid_led(14,6,9) --go button
+    end
+    grid_led(15,6,6) -- reset button
+    grid_led(16,6,(math.random(3)+3)) --random button
+
+    --inverts
+    for l=1,4 do
+      grid_led((l+12),5,((invert[l]*9)+6))
+    end
+  end
+
+  if noteSet[5] == true then
+    noteDraw()
+  end
+
+  grid_refresh()
+end
+
+function keyToNote(x,y)
+  return ((8-y)*12) + (x-1)
+end
+
+function noteToKey(i)
+  x = (i%12)+1
+  y = 8 - (math.floor(i/12))
+  return x, y
+end
+
+function noteDraw()
+  for i=1,12 do
+    for j=1,8 do
+      grid_led(i,j,displayScale[i])
+    end
+  end
+  for k=1,4 do
+    if noteSet[k] == true then
+      local l, m = noteToKey(notes[k])
+      grid_led(l,m,15)
+    elseif noteSet[k] == false then
+      local l, m = noteToKey(notes[k])
+      grid_led(l,m,10)
+    end
+  end
+end
+
+function blink(i) --visualizer
+  if grid_size_x() == 16 and grid_size_y() == 16 and visuals == true then --check if 16x16 grid and visuals on
+    if i == 1 then --left
+      if blinkSet[i] == true then
+        for j=1,8 do
+          for k=9,16 do
+            grid_led(j,k,(9-j),true)
+          end
+        end
+        blinkSet[i] = false
+      end
+    end
+    if i == 2 then --top
+      if blinkSet[i] == true then
+        for j=1,16 do
+          for k=9,16 do
+            grid_led(j,k,(16-k),true)
+          end
+        end
+        blinkSet[i] = false
+      end
+    end
+    if i == 3 then --bottom
+      if blinkSet[i] == true then
+        for j=1,16 do
+          for k=9,16 do
+            grid_led(j,k,(k-8),true)
+          end
+        end
+        blinkSet[i] = false
+      end
+    end
+    if i == 4 then --right
+      if blinkSet[i] == true then
+        for j=9,16 do
+          for k=9,16 do
+            grid_led(j,k,(j-8),true)
+          end
+        end
+        blinkSet[i] = false
+      end
+    end
+  end
+end
+
+function setTempo(i)
+  tempo = i
+  tempo = 60/(tempo*div)
+  m.time = tempo
+end
+
+function setVel(i)
+  vel = i
+  velMax = math.max(0, math.min(127, (vel + (velVary/2)))) --find max velocity
+  velMin = math.max(0, math.min(127, (vel - (velVary/2)))) --find min velocity
+end
+
+--initialization
+createpatterns()
+m = metro.init(step, tempo)
+m:start()
