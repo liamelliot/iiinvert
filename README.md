@@ -20,13 +20,13 @@ Most of iiinvert is one function per key on this single page:
 
 [Random] randomizes the entire pattern.
 
-There are 3 button combos. For each one, hold any key on one of the four sequences and then press the combo key.
+There are 3 button combos. For each one, hold the relevant track key (bottom left) and then press the combo key.
 
-[sequence key] + [random] randomizes just that row
+[track key] + [random] randomizes just that row
 
-[sequence key] + [reset] clears just that row
+[track key] + [reset] clears just that row
 
-[any sequence key] + [invert 1-4] opens a note selector screen for sequence 1-4. midi note 0 (C-1) is bottom left, which each row being an octave (12 steps) higher. The selected track is brightly lit, with the other tracks’ notes shown dimly.
+[track key] + [play] opens a note selector screen for sequence 1-4. midi note 0 (C-1) is bottom left, which each row being an octave (12 steps) higher. The selected track is brightly lit, with the other tracks’ notes shown dimly. Select which track to edit on the left, and press the active track button to exit and return to the main screen.
 
 More options are available in lines 22-30 of the code:
 
