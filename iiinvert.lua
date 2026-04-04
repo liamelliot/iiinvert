@@ -13,9 +13,9 @@
 --  ----------------------------
 
 --the diagram above shows the main interface. there are 3 button combos to know
---hold row + randomize does just that row
---hold row + reset clears that row (otherwise resets to step 1 immediately)(handy for syncing with other musicians)
---hold row + invert enters note selection screen (bottom left is 0, each row an octave)
+--hold track button + randomize does just that row
+--hold track button + reset clears that row (otherwise resets to step 1 immediately)(handy for syncing with other musicians)
+--hold row + play enters note selection screen (bottom left is 0, each row an octave)
 
 --the variables below set script behavior
 --setTempo(i) and setVel(i) can be used to change tempo or velocity during playback. i is bpm/velocity
@@ -26,6 +26,7 @@ velVary = 50 --set variation in velocity
 ch = 1 --set output channel
 tempo = 135 --bpm
 div = 4 --subdivide tempo e.g. 4 is 16th notes
+
 visuals = true --turn on/off visualizations (grid zero only)
 running = true --begin with playhead active
 noteOffs = true --send note off before starting next step and when pausing
@@ -188,14 +189,15 @@ function event_grid(x,y,z)
       seq.fou[x] = seq.fou[x] == 0 and 1 or 0
     end
 
-    if y <= 4 then--mark row(s) as held and 'none held' as false
-      held[y] = true
-      held[5] = false
-    end
 
-    if y >= 5 and x <= 8 then --set probability
+    if y >= 5 and x <= 8 and x > 1 then --set probability
       prob.key[y-4] = x
       prob.odds[y-4] = math.floor(((x-1) * (100/7))+0.5)
+    end
+
+    if y>= 5 and x == 1 then --hold row
+      held[y-4] = true
+      held[5] = false
     end
 
     if x > 8 and y == 7 then  --set number of steps in sequence
@@ -223,9 +225,20 @@ function event_grid(x,y,z)
       end
 
     end
+
+
     if y == 6 and x == 14 then
-      m:start()
-      running = true
+      if held[5] == true then --start playback
+        m:start()
+        running = true
+      end
+      for i=1,4 do
+        if held[i] == true then
+          noteDraw() --go to note selector
+          noteSet[i] = true
+          noteSet[5] = true
+        end
+      end
     end
 
     --reset playhead. or if row held then clear that row
@@ -283,33 +296,42 @@ function event_grid(x,y,z)
     end
 
     if y == 5 and x >= 13 then --invert row or go to set note
-      if held[5] == true then
         invert[x-12] = invert[x-12] == 0 and 1 or 0
-      elseif held[5] == false then
-        noteDraw()
-        noteSet[x-12] = true
-        noteSet[5] = true
-      end
     end
 
   elseif z == 0 then --when row released stop marking it as held
-    if y <= 4 then
-      held[y] = false
+    if y >= 5 and x == 1 then
+      held[y-4] = false
       if held[1] == false and held[2] == false and held[3] == false and held[4] == false then
         held[5] = true --check in case one row released when another still held
       end
     end
 
   elseif z == 1 and noteSet[5] == true then
-    for n=1,4 do
-      if noteSet[n] == true then
-        notes[n] = keyToNote(x,y)
+    if x >= 5 and y <= 8 then
+      for n=1,4 do
+        if noteSet[n] == true then
+          notes[n] = keyToNote(x,y)
+        end
       end
     end
-    for m=1,5 do
-      noteSet[m] = false
+    if x == 1 and y >= 5 and y <= 8 then
+
+      if noteSet[y-4] == true then
+        for m=1,5 do
+          noteSet[m] = false
+        end
+    elseif noteSet[y-4] == false then
+        for m=1,5 do
+          noteSet[m] = false
+        end
+        noteSet[y-4] = true
+        noteSet[5] = true
+      end
     end
   end
+
+
   redraw()
 end
 
@@ -349,14 +371,20 @@ function redraw() --grid lighting
       blink(4)
     end
 
+
     --probabilities
-    for j=1, 8 do
+    for j=2, 8 do
       for k=5, 8 do
         grid_led(j,k,j)
       end
     end
     for k=1,4 do
       grid_led(prob.key[k], (k+4), 13)
+    end
+
+    --row select
+    for l=5,8 do
+      grid_led(1,l,13)
     end
 
     --length
@@ -380,9 +408,14 @@ function redraw() --grid lighting
     end
 
     if running == true then
-      grid_led(13,6,9) --stop button
+      grid_led(13,6,10) --stop button
+      if seq.pos%div == 1 then
+        grid_led(14,6,15) --go button blink on
+      else
+        grid_led(14,6,12) --go button blink off
+      end
     else
-      grid_led(14,6,9) --go button
+      grid_led(14,6,15) -- brighter go button when stopped
     end
     grid_led(15,6,6) -- reset button
     grid_led(16,6,(math.random(3)+3)) --random button
@@ -401,34 +434,37 @@ function redraw() --grid lighting
 end
 
 function keyToNote(x,y)
-  return ((8-y)*12) + (x-1)
+  return ((8-y)*12) + (x-5)
 end
 
 function noteToKey(i)
-  x = (i%12)+1
+  x = (i%12)+5
   y = 8 - (math.floor(i/12))
   return x, y
 end
 
 function noteDraw()
-  for i=1,12 do
+
+  for i=5,16 do
     for j=1,8 do
-      grid_led(i,j,displayScale[i])
+      grid_led(i,j,displayScale[i-4])
     end
   end
   for k=1,4 do
     if noteSet[k] == true then
       local l, m = noteToKey(notes[k])
       grid_led(l,m,15)
+      grid_led(1,(k+4),15)
     elseif noteSet[k] == false then
       local l, m = noteToKey(notes[k])
       grid_led(l,m,10)
+      grid_led(1,(k+4),8)
     end
   end
 end
 
 function blink(i) --visualizer
-  if grid_size_x() == 16 and grid_size_y() == 16 and visuals == true then --check if 16x16 grid and visuals on
+  if grid_size_x() == 16 and grid_size_y() == 16 and visuals then --check if 16x16 grid and visuals on
     if i == 1 then --left
       if blinkSet[i] == true then
         for j=1,8 do
@@ -477,6 +513,7 @@ function setTempo(i)
   tempo = 60/(tempo*div)
   m.time = tempo
 end
+
 
 function setVel(i)
   vel = i
