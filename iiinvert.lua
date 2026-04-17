@@ -1,5 +1,6 @@
 -- iiinvert
 -- 4 Track Live Trig Sequencer
+-- see https://llllllll.co/t/iiinvert/74376
 
 --             GRID
 --  ----------------------------
@@ -8,14 +9,15 @@
 -- |                            |
 -- |----------------------------|
 -- |              |store invert |
--- |  probability |recall stop/go/reset playhead/randomize |
+-- |  probability |recall stop/go/reset/random |
 -- |              |  length     |
 --  ----------------------------
 
 --the diagram above shows the main interface. there are 3 button combos to know
---hold track button + randomize does just that row
---hold track button + reset clears that row (otherwise resets to step 1 immediately)(handy for syncing with other musicians)
---hold row + play enters note selection screen (bottom left is 0, each row an octave)
+--track button + randomize does just that row
+--track button + reset clears that row (otherwise resets to step 1 immediately)(handy for syncing with other musicians)
+--track button + play enters note selection screen (bottom left is 0, each row an octave)
+--track button + stop enters tempo selection screen with manual or tap entry
 
 --the variables below set script behavior
 --setTempo(i) and setVel(i) can be used to change tempo or velocity during playback. i is bpm/velocity
@@ -31,9 +33,17 @@ visuals = true --turn on/off visualizations (grid zero only)
 running = true --begin with playhead active
 noteOffs = true --send note off before starting next step and when pausing
 
+--tempo view stuff
+nb = 10 --number brightness
+start = 0
+taps = {0} --set first in array to 0 for tapping
+tc = 2 --tap count
+tempoView = false
+
+
 -------------------------------
 
-tempo = 60/(tempo*div) --bpm to time
+tempoTime = 60/(tempo*div) --bpm to time
 velMax = math.max(0, math.min(127, (vel + (velVary/2)))) --find max velocity
 velMin = math.max(0, math.min(127, (vel - (velVary/2)))) --find min velocity
 
@@ -57,7 +67,7 @@ blinkSet = {false,false,false,false}
 
 --create and populate track sequences
 seq = {
-  pos = 0,
+  pos = 1,
   length = 16,
   one = {}, two = {}, thr = {}, fou = {},
 }
@@ -68,7 +78,7 @@ for i=1, 16 do
   seq.fou[i] = 0
 end
 
-for j=1,127 do
+for j=1,127 do --array for held notes
   currentNotes[j] = false
 end
 
@@ -167,15 +177,13 @@ function step()
             currentNotes[notes[4]+1] = true
         end
       end
-
-    redraw()
-
   end
+  redraw()
 end
 
 --grid presses
 function event_grid(x,y,z)
-  if z == 1 and noteSet[5] == false then --button on
+  if z == 1 and noteSet[5] == false and tempoView == false then --button on
     if y == 1 then
       seq.one[x] = seq.one[x] == 0 and 1 or 0 --flips state for reasons i don't understand
     end
@@ -215,22 +223,37 @@ function event_grid(x,y,z)
     end
 
     if y == 6 and x == 13 then
-      m:stop()
-      running = false
-      for j=1,127 do
-        if currentNotes[j] == true then
-          midi_note_off(j-1,0,ch)
-          currentNotes[j] = false
+      if held[5] == true then
+        m:stop()
+        running = false
+        metro.free_all()
+        for j=1,127 do
+          if currentNotes[j] == true then
+            midi_note_off(j-1,0,ch)
+            currentNotes[j] = false
+          end
         end
       end
-
+      for i=1,4 do --any track key + stop to go to tempo
+        if held[i] == true then
+          tempoView = true
+          tempoToDigits(tempo)
+        end
+      end
+      for j=1,4 do
+        held[j] = false
+        held[5] = true
+      end
     end
 
 
     if y == 6 and x == 14 then
       if held[5] == true then --start playback
-        m:start()
         running = true
+        step()
+        metro.free_all()
+        m = metro.init(step, tempoTime)
+        m:start()
       end
       for i=1,4 do
         if held[i] == true then
@@ -244,8 +267,12 @@ function event_grid(x,y,z)
     --reset playhead. or if row held then clear that row
     if y == 6 and x == 15 then
       if held[5] == true then --reset playhead
-        seq.pos = 1
+        seq.pos = 0
+        step()
+        --seq.pos = 1
         m:stop()
+        metro.free_all()
+        m = metro.init(step, tempoTime)
         m:start()
       end
       if held[1] == true then --clear that row
@@ -299,7 +326,7 @@ function event_grid(x,y,z)
         invert[x-12] = invert[x-12] == 0 and 1 or 0
     end
 
-  elseif z == 0 then --when row released stop marking it as held
+  elseif z == 0 and noteSet[5] == false and tempoView == false then --when row released stop marking it as held
     if y >= 5 and x == 1 then
       held[y-4] = false
       if held[1] == false and held[2] == false and held[3] == false and held[4] == false then
@@ -307,7 +334,8 @@ function event_grid(x,y,z)
       end
     end
 
-  elseif z == 1 and noteSet[5] == true then
+--------noteset screen
+  elseif z == 1 and noteSet[5] == true and tempoView == false then
     if x >= 5 and y <= 8 then
       for n=1,4 do
         if noteSet[n] == true then
@@ -320,6 +348,10 @@ function event_grid(x,y,z)
       if noteSet[y-4] == true then
         for m=1,5 do
           noteSet[m] = false
+          for j=1,4 do --reset held state when returning to main screen
+            held[j] = false
+          end
+          held[5] = true
         end
     elseif noteSet[y-4] == false then
         for m=1,5 do
@@ -329,15 +361,60 @@ function event_grid(x,y,z)
         noteSet[5] = true
       end
     end
+
+-----tempo screen
+  elseif z == 1 and tempoView == true then
+    if y == 6 and x <=3 then
+      hundreds = x-1
+    end
+    if y == 7 and x <=10 then
+      tens = x-1
+    end
+    if y == 8 and x <=10 then
+      ones = x-1
+    end
+
+    if x == 16 then
+      div = 9-y  --set div number
+      setTempo(tempo) --update tempo/div
+    end
+
+    tempo = digitsToTempo(hundreds,tens,ones)--update tempo from digits
+    drawTempo() --draw the tempo screen generally
+
+    if y == 8 and x == 13 then --tap tempo here
+      tapTempo()
+    end
+    if y == 8 and x == 14 then --1 faster
+      tempo = tempo + 1
+      tempoToDigits(tempo)
+      setTempo(tempo)
+      drawTempo()
+    end
+    if y == 8 and x == 12 then --1 slower
+      tempo = tempo - 1
+      tempoToDigits(tempo)
+      setTempo(tempo)
+      drawTempo()
+    end
+    if y == 7 and x == 13 then --exit tempo screen
+      tempoView = false
+      for j=1,4 do
+        held[j] = false
+      end
+      held[5] = true
+      redraw()
+    end
+
+    setTempo(tempo)
+
   end
-
-
   redraw()
 end
 
 function redraw() --grid lighting
   grid_led_all(0)
-  if noteSet[5] == false then
+  if noteSet[5] == false and tempoView == false then
     for i=1, seq.length do --will = 1(normal) or -1(invert) if step is on
       if (seq.one[i] - invert[1]) ~= 0 then
         grid_led(i, 1, 10)
@@ -352,25 +429,45 @@ function redraw() --grid lighting
         grid_led(i, 4, 10)
       end
     end
-
-    for j=1,4 do --playhead
-      grid_led(seq.pos, j, 5, true)
+    for i=(seq.length+1), 16 do --copy of above but dimmer for inactive portion
+      if (seq.one[i] - invert[1]) ~= 0 then
+        grid_led(i, 1, 1)
+      end
+      if (seq.two[i] - invert[2]) ~= 0 then
+        grid_led(i, 2, 1)
+      end
+      if (seq.thr[i] - invert[3]) ~= 0 then
+        grid_led(i, 3, 1)
+      end
+      if (seq.fou[i] - invert[4]) ~= 0 then
+        grid_led(i, 4, 1)
+      end
     end
 
-    --call visuals
-    if (seq.one[seq.pos] - invert[1]) ~= 0 then
-      blink(1)
-    end
-    if (seq.two[seq.pos] - invert[2]) ~= 0 then
-      blink(2)
-    end
-    if (seq.thr[seq.pos] - invert[3]) ~= 0 then
-      blink(3)
-    end
-    if (seq.fou[seq.pos] - invert[4]) ~= 0 then
-      blink(4)
-    end
+    if seq.pos > 0 then --protects against reset errors when paused
+      for j=1,4 do --playhead
+        grid_led(seq.pos, j, 5, true)
+      end
 
+      --call visuals
+      if (seq.one[seq.pos] - invert[1]) ~= 0 then
+        blink(1)
+      end
+      if (seq.two[seq.pos] - invert[2]) ~= 0 then
+        blink(2)
+      end
+      if (seq.thr[seq.pos] - invert[3]) ~= 0 then
+        blink(3)
+      end
+      if (seq.fou[seq.pos] - invert[4]) ~= 0 then
+        blink(4)
+      end
+    end
+    if seq.pos == 0 then--playhead edge case when reset to step 1 while paused
+      for j=1,4 do
+        grid_led(1, j, 5, true)
+      end
+    end
 
     --probabilities
     for j=2, 8 do
@@ -428,6 +525,10 @@ function redraw() --grid lighting
 
   if noteSet[5] == true then
     noteDraw()
+  end
+
+  if tempoView == true then
+    drawTempo()
   end
 
   grid_refresh()
@@ -510,10 +611,9 @@ end
 
 function setTempo(i)
   tempo = i
-  tempo = 60/(tempo*div)
-  m.time = tempo
+  tempoTime = 60/(tempo*div)
+  m.time = tempoTime
 end
-
 
 function setVel(i)
   vel = i
@@ -521,7 +621,170 @@ function setVel(i)
   velMin = math.max(0, math.min(127, (vel - (velVary/2)))) --find min velocity
 end
 
+function tempoToDigits(i)
+  hundreds = math.floor(i/100)
+  tens = math.floor(i/10) % 10
+  ones = math.floor(i % 10)
+end
+
+function digitsToTempo(a,b,c)
+  return (a*100) + (b*10) + c
+end
+
+function numberDraw(n,p) --n is number, p is x position
+  if n == 0 then
+    for i=1,5 do--sides of 8
+      grid_led(0+p,i,nb)
+      grid_led(3+p,i,nb)
+    end
+    for i=1,2 do --acrosses of 8
+      grid_led(i+p,1,nb)
+      grid_led(i+p,5,nb)
+    end
+  elseif n == 1 then
+    for i=1,5 do
+      grid_led(2+p,i,nb)
+    end
+  elseif n == 2 then
+    for i=0,3 do
+      grid_led(i+p,1,nb)--horiz lines
+      grid_led(i+p,3,nb)
+      grid_led(i+p,5,nb)
+    end
+    grid_led(3+p,2,nb)--connections
+    grid_led(p,4,nb)
+  elseif n == 3 then
+    for i=0,3 do
+      grid_led(i+p,1,nb)--horiz lines
+      grid_led(i+p,3,nb)
+      grid_led(i+p,5,nb)
+    end
+    grid_led(3+p,2,nb)
+    grid_led(3+p,4,nb)
+  elseif n == 4 then
+    for i=1,5 do
+      grid_led(3+p,i,nb)
+    end
+    for j=0,2 do
+      grid_led(j+p,3,nb)
+      grid_led(p,1+j,nb)
+    end
+  elseif n == 5 then
+    for i=0,3 do
+      grid_led(i+p,1,nb)
+      grid_led(i+p,3,nb)
+      grid_led(i+p,5,nb)
+    end
+    grid_led(3+p,4,nb)
+    grid_led(p,2,nb)
+  elseif n == 6 then
+    for i=0,3 do
+      grid_led(i+p,1,nb)
+      grid_led(i+p,3,nb)
+      grid_led(i+p,5,nb)
+    end
+    grid_led(p,2,nb)
+    grid_led(p,4,nb)
+    grid_led(p+3,4,nb)
+  elseif n == 7 then
+    for i=0,3 do
+      grid_led(i+p,1,nb)
+    end
+    grid_led(p+3,2,nb)
+    grid_led(p+2,3,nb)
+    grid_led(p+2,4,nb)
+    grid_led(p+2,5,nb)
+  elseif n == 8 then
+    for i=1,5 do
+      grid_led(0+p,i,nb)
+      grid_led(3+p,i,nb)
+    end
+    for i=1,2 do
+      grid_led(i+p,1,nb)
+      grid_led(i+p,3,nb)
+      grid_led(i+p,5,nb)
+    end
+  elseif n == 9 then
+    for i=1,5 do
+      grid_led(3+p,i,nb)
+    end
+    for i=0,3 do
+      grid_led(i+p,1,nb)
+      grid_led(i+p,3,nb)
+    end
+    grid_led(p,2,nb)
+  end
+end
+
+function drawTempo()
+  grid_led_all(0)
+  if tempo >= 100 then
+    numberDraw(hundreds,1) --numberDraw does the digits
+  end
+  if tempo >= 10 then
+    numberDraw(tens,6)
+  end
+  numberDraw(ones,11)
+  for i=1,3 do --hundreds background
+    grid_led(i,6,i)
+  end
+  for i=1,10 do --tens and ones background
+    grid_led(i,7,i)
+    grid_led(i,8,i)
+  end
+  for i=6,8 do
+    grid_led(1,i,1)--zero dimmer to help remember these are 0-9
+  end
+  grid_led(hundreds+1,6,15) --show the selected digits
+  grid_led(tens+1,7,15)
+  grid_led(ones+1,8,15)
+
+  for i=1,8 do
+    grid_led(16,i,2) --div background
+  end
+  grid_led(16,9-div,15) --show current div
+  grid_led(13,8,15) --tap tempo button
+  if seq.pos%div == 1 then
+    grid_led(13,8,15) --tap button blink on
+  else
+    grid_led(13,8,12) --tap button blink off
+  end
+  grid_led(12,8,5) --slower
+  grid_led(14,8,5) --faster
+  grid_led(13,7,12) --confirm
+
+end
+
+function tapTempo()
+
+  taps[tc] = get_time()
+
+  if (taps[tc] - taps[tc-1]) < 2 then --resets after 2 seconds no tap
+
+    if tc >= 4 then --if we have enough samples (4)
+      timeSum = 0
+      for i=2,tc do --add up all the inter tap times
+        timeSum = timeSum + (taps[i]-taps[i-1])
+      end
+      tapAvg = timeSum/(tc-1) --divide by number of taps
+      tempo = 60 * (1/tapAvg) -- convert times to bpm
+      tempoToDigits(tempo) --update the individual digits
+      setTempo(tempo) --update the metro time/tempoTime from bpm
+      drawTempo() --draw the tempo screen
+    end
+    tc = tc + 1
+  else --if it's been 2s
+    for i=1,tc do
+      taps[tc] = 0 --erase the values
+    end
+    taps[1] = get_time() --get new reference time
+    tc = 2 --set the count so the next tap can reference the reference time
+  end
+end
+
+
 --initialization
 createpatterns()
-m = metro.init(step, tempo)
+tempoToDigits(tempo)
+m = metro.init(step, tempoTime)
 m:start()
